@@ -9,7 +9,7 @@ const { body, validationEmail } = require('express-validator');
 const Connection = require('../modal/connection');
 const multer = require('multer');
 const path = require('path');
-
+const authenticate = require('../auth/authenticate');
 
 // Configuração do multer para armazenar arquivos na pasta 'uploads'
 const storage = multer.diskStorage({
@@ -101,13 +101,12 @@ router.post('/login', async (req, res) => {
 
     const payload = {
       user: {
-        id: user.id,
+        id: user._id,
         name: user.name,
         userType: user.userType
       }
     };
 
-    // Gerar token JWT
     jwt.sign(
       payload,
       process.env.JWT_SECRET || '12131415',
@@ -117,7 +116,7 @@ router.post('/login', async (req, res) => {
         res.json({
           token,
           user: {
-            id: user.id,
+            id: user._id,
             name: user.name,
             email: user.email,
             userType: user.userType,
@@ -131,41 +130,22 @@ router.post('/login', async (req, res) => {
     res.status(500).send('Erro no servidor');
   }
 });
-
-// Middleware para verificar o token
-const authenticate = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ message: 'Token não fornecido ou formato inválido' });
-  }
-
-  const token = authHeader.split(' ')[1];
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || '12131415');
-    req.user = decoded.user;
-    next(); 
-  } catch (err) {
-    console.error('Erro ao verificar o token:', err.message);
-    res.status(401).json({ message: 'Token inválido' });
-  }
-};
-
   
-// Rota de conexão
+// Rota para conectar o usuário ao cuidador
 router.post('/conectar', authenticate, async (req, res) => {
   const { emailCuidador } = req.body;
 
   try {
     const usuarioId = req.user.id; 
 
+    console.log('ID do usuário autenticado:', usuarioId);
+
     const cuidador = await User.findOne({ email: emailCuidador });
     if (!cuidador) {
       return res.status(400).json({ message: 'Cuidador não encontrado' });
     }
 
-    const usuario = await User.findById(usuarioId);
+    const usuario = await User.findById(usuarioId); 
     if (!usuario) {
       return res.status(400).json({ message: 'Usuário não encontrado' });
     }
@@ -183,7 +163,7 @@ router.post('/conectar', authenticate, async (req, res) => {
 
     res.status(200).json({
       message: 'Conexão estabelecida com sucesso',
-      conexoes: usuario.connections
+      conexoes: usuario.connections,
     });
   } catch (err) {
     console.error('Erro durante a conexão:', err.message);
@@ -191,27 +171,28 @@ router.post('/conectar', authenticate, async (req, res) => {
   }
 });
 
+
 // Rota para upload de mídia
-router.post('/upload-midia', upload.single('file'), async (req, res) => {
+router.post('/upload-midia', authenticate, upload.single('file'), async (req, res) => {
+  console.log('Dados recebidos:', req.body);
+  console.log('Arquivo recebido:', req.file);
   try {
-    const { tipo, descricao, remetenteId } = req.body;
+    console.log('Chegou na rota de upload de mídia!');
+    const { tipo, descricao, remetenteId, destinatarioId } = req.body;
 
     if (!req.file) {
       return res.status(400).json({ message: 'Nenhum arquivo foi enviado.' });
     }
 
     const remetente = await User.findById(remetenteId);
-
     if (!remetente) {
-      return res.status(404).json({ message: 'Remetente não encontrado' });
+      return res.status(404).json({ message: 'Remetente não encontrado.' });
     }
 
-    if (!remetente.connections || remetente.connections.length === 0) {
-      return res.status(400).json({ message: 'Nenhuma conexão encontrada para o remetente' });
+    if (!remetente.connections.includes(destinatarioId)) {
+      return res.status(400).json({ message: 'Destinatário não está conectado ao remetente.' });
     }
 
-    const destinatarioId = remetente.connections[0]; 
-    // Criar e salvar a mídia no banco de dados
     const novaMidia = new Midia({
       tipo,
       caminho: req.file.path,
@@ -221,7 +202,6 @@ router.post('/upload-midia', upload.single('file'), async (req, res) => {
     });
 
     await novaMidia.save();
-
     res.status(200).json({ message: 'Mídia enviada com sucesso', midia: novaMidia });
   } catch (err) {
     console.error(err.message);
@@ -230,24 +210,45 @@ router.post('/upload-midia', upload.single('file'), async (req, res) => {
 });
 
 // Rota para obter todas as mídias do cuidador autenticado
-router.get('/midias/:connectionId', async (req, res) => {
-  const { connectionId } = req.params;
-  
-  if (!mongoose.Types.ObjectId.isValid(connectionId)) {
-    return res.status(400).json({ message: 'ID de conexão inválido.' });
-  }
-
+router.get('/midias/:connectionId', authenticate, async (req, res) => {
   try {
-    const midias = await Midia.find({ destinatario: connectionId });
-    res.json(midias);
-  } catch (error) {
-    console.error('Erro ao buscar mídias:', error);
-    res.status(500).json({ message: 'Erro ao buscar mídias.' });
+    const { connectionId } = req.params;
+    const userId = req.user.id; 
+    const midias = await Midia.find({
+      $or: [ 
+        { remetente: userId, destinatario: connectionId },
+        { remetente: connectionId, destinatario: userId }
+      ]
+    });
+
+    if (!midias || midias.length === 0) {
+      return res.status(404).json({ message: 'Nenhuma mídia encontrada' });
+    }
+
+    res.status(200).json(midias);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Erro no servidor');
+  } 
+});
+
+router.get('/user/:id', authenticate, async (req, res) => {
+  try {
+    const userId = req.params.id;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'Usuário não encontrado' });
+    }
+
+
+    const { password, ...userData } = user.toObject(); 
+    res.status(200).json(userData);
+  } catch (err) {
+    console.error('Erro ao buscar usuário:', err.message);
+    res.status(500).send('Erro no servidor');
   }
 });
 
-
-
-  
 
 module.exports = router;
