@@ -15,7 +15,7 @@ const MidiaSchema = new mongoose.Schema({
   },
   remetente: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'User', 
     required: true
   },
   destinatario: {

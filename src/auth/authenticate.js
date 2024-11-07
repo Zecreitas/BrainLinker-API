@@ -12,7 +12,6 @@ const authenticate = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || '12131415');
-    console.log('Token decodificado:', decoded);
 
     if (!decoded.user || !decoded.user.id) {
       return res.status(401).json({ message: 'Token inválido: ID do usuário não encontrado' });
