@@ -63,10 +63,14 @@ router.post('/cadastro',
         return res.status(400).json({ message: 'Usuário já existe' });
       }
 
+      // Hash da senha
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(password, salt);
+
       user = new User({
         name,
         email,
-        password,
+        password: hashedPassword,
         userType,
         relation: userType === 'familiar/amigo' ? relation : undefined,
         nascDate: userType === 'familiar/amigo' ? nascDate : undefined,
@@ -80,6 +84,7 @@ router.post('/cadastro',
     }
   }
 );
+
 
  // Rota de login
 router.post('/login', async (req, res) => {
@@ -95,7 +100,8 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Credenciais inválidas' });
     }
 
-    if (user.password !== password) {
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
       return res.status(400).json({ message: 'Credenciais inválidas' });
     }
 
@@ -130,6 +136,7 @@ router.post('/login', async (req, res) => {
     res.status(500).send('Erro no servidor');
   }
 });
+
   
 // Rota para conectar o usuário ao cuidador
 router.post('/conectar', authenticate, async (req, res) => {
@@ -172,17 +179,15 @@ router.post('/conectar', authenticate, async (req, res) => {
 
 
 router.post('/upload-midia', authenticate, upload.single('file'), async (req, res) => {
-  console.log('Recebendo dados da requisição:', req.body);
-  console.log('Arquivo recebido:', req.file);
 
   if (!req.file) {
     return res.status(400).json({ message: 'Nenhum arquivo foi enviado.' });
   }
 
-  const { tipo, descricao, remetenteId } = req.body; // Sem o destinatarioId
+  const { tipo, descricao, remetenteId } = req.body;
 
   try {
-    const remetente = await User.findById(remetenteId).populate('connections'); // Busca conexões
+    const remetente = await User.findById(remetenteId).populate('connections');
     if (!remetente) {
       return res.status(404).json({ message: 'Remetente não encontrado.' });
     }
@@ -193,13 +198,12 @@ router.post('/upload-midia', authenticate, upload.single('file'), async (req, re
       caminho: req.file.path,
       descricao,
       remetente: remetenteId,
-      destinatario: cuidador._id, // Associa cada mídia a um cuidador
+      destinatario: cuidador._id,
       dataEnvio: Date.now()
     }));
 
     const midiasSalvas = await Midia.insertMany(midiasParaSalvar);
 
-    console.log('Mídias salvas com sucesso:', midiasSalvas);
     res.status(200).json({ message: 'Mídia enviada com sucesso para todos os cuidadores', midias: midiasSalvas });
   } catch (err) {
     console.error('Erro no servidor:', err.message);
@@ -213,7 +217,6 @@ router.post('/upload-midia', authenticate, upload.single('file'), async (req, re
 router.get('/midias', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
-    console.log('ID do usuário autenticado:', userId);
 
     const midias = await Midia.find({
       $or: [
@@ -224,8 +227,6 @@ router.get('/midias', authenticate, async (req, res) => {
     .populate('remetente', 'name relation nascDate')
     .populate('destinatario', 'name relation nascDate')
     .sort({ dataEnvio: -1 }); 
-
-    console.log('Mídias encontradas:', midias);
 
     if (!midias || midias.length === 0) {
       return res.status(404).json({ message: 'Nenhuma mídia encontrada' });
@@ -344,18 +345,49 @@ router.get('/messages/:connectionId', authenticate, async (req, res) => {
 });
 
 // Rota para buscar mensagens não lidas
-router.get('/mensagens-naolidas/:connectionId', authenticate, async (req, res) => {
+router.get('/mensagens-naolidas/:connectionId?', authenticate, async (req, res) => {
   try {
     const { connectionId } = req.params;
     const userId = req.user.id;
+    const userType = req.user.userType;
 
-    const mensagensNaoLidas = await Message.find({
-      remetente: connectionId,
-      destinatario: userId,
-      lida: false 
-    }).sort({ dataEnvio: 1 });
+    console.log('=== Debugging Informações Iniciais ===');
+    console.log('User ID:', userId);
+    console.log('User Type:', userType);
+    console.log('Connection ID:', connectionId);
+
+    let mensagensNaoLidas;
+
+    if (userType === 'cuidador') {
+      console.log('Consultando mensagens para cuidador...');
+      mensagensNaoLidas = await Message.find({
+        destinatario: userId,
+        lida: false,
+      }).sort({ dataEnvio: 1 });
+
+      console.log('Mensagens não lidas (cuidador):', mensagensNaoLidas);
+    }
+
+    if (userType === 'familiar/amigo') {
+      console.log('Consultando mensagens para familiar/amigo...');
+      if (!connectionId) {
+        console.error('Connection ID não fornecido para familiar/amigo');
+        return res.status(400).json({ message: 'Connection ID é necessário' });
+      }
+
+      mensagensNaoLidas = await Message.find({
+        $or: [
+          { remetente: connectionId, destinatario: userId },
+          { remetente: userId, destinatario: connectionId },
+        ],
+        lida: false,
+      }).sort({ dataEnvio: 1 });
+
+      console.log('Mensagens não lidas (familiar/amigo):', mensagensNaoLidas);
+    }
 
     if (!mensagensNaoLidas || mensagensNaoLidas.length === 0) {
+      console.log('Nenhuma mensagem não lida encontrada');
       return res.status(404).json({ message: 'Nenhuma mensagem não lida encontrada' });
     }
 
@@ -365,6 +397,8 @@ router.get('/mensagens-naolidas/:connectionId', authenticate, async (req, res) =
     res.status(500).send('Erro no servidor');
   }
 });
+
+
 
 // Marcar mensagens como lidas
 router.put('/marcar-como-lida/:messageId', authenticate, async (req, res) => {
@@ -386,22 +420,52 @@ router.put('/marcar-como-lida/:messageId', authenticate, async (req, res) => {
   }
 });
 
+// Marcar mídias como lidas
+router.put('/marcar-midia-como-lida/:midiaId', authenticate, async (req, res) => {
+  try {
+    const { midiaId } = req.params;
+    const midia = await Midia.findById(midiaId);
+    if (!midia) {
+      return res.status(404).json({ message: 'Mídia não encontrada' });
+    }
+
+    midia.lida = true;
+    await midia.save();
+
+    res.status(200).json({ message: 'Mídia marcada como lida' });
+  } catch (err) {
+    console.error('Erro ao marcar mídia como lida:', err.message);
+    res.status(500).send('Erro no servidor');
+  }
+});
+
+
 // Rota para obter as mídias enviadas na última semana
-router.get('/midias-semana/:connectionId', authenticate, async (req, res) => {
+router.get('/midias-semana/:connectionId?', authenticate, async (req, res) => {
   try {
     const { connectionId } = req.params;
     const userId = req.user.id;
+    const userType = req.user.userType;
 
     const umaSemanaAtras = new Date();
     umaSemanaAtras.setDate(umaSemanaAtras.getDate() - 7);
 
-    const midias = await Midia.find({
-      $or: [
-        { remetente: userId, destinatario: connectionId },
-        { remetente: connectionId, destinatario: userId }
-      ],
-      dataEnvio: { $gte: umaSemanaAtras } 
-    }).populate('remetente', 'name relation nascDate');
+    let midias;
+
+    if (userType === 'cuidador') {
+      midias = await Midia.find({
+        destinatario: userId,
+        dataEnvio: { $gte: umaSemanaAtras },
+      }).populate('remetente', 'name relation nascDate');
+    } else {
+      midias = await Midia.find({
+        $or: [
+          { remetente: userId, destinatario: connectionId },
+          { remetente: connectionId, destinatario: userId },
+        ],
+        dataEnvio: { $gte: umaSemanaAtras },
+      }).populate('remetente', 'name relation nascDate');
+    }
 
     if (!midias || midias.length === 0) {
       return res.status(404).json({ message: 'Nenhuma mídia encontrada na última semana' });
@@ -414,36 +478,11 @@ router.get('/midias-semana/:connectionId', authenticate, async (req, res) => {
   }
 });
 
-// Rota para obter mídias recentes
-router.get('/midias-recentes/:connectionId', authenticate, async (req, res) => {
-  try {
-    const { connectionId } = req.params;
-    const userId = req.user.id;
-
-    const midias = await Midia.find({
-      $or: [
-        { remetente: userId, destinatario: connectionId },
-        { remetente: connectionId, destinatario: userId }
-      ]
-    }).sort({ dataEnvio: -1 }) 
-    .populate('remetente', 'name relation nascDate');
-
-    if (!midias || midias.length === 0) {
-      return res.status(404).json({ message: 'Nenhuma mídia encontrada' });
-    }
-
-    res.status(200).json(midias);
-  } catch (err) {
-    console.error('Erro ao buscar mídias recentes:', err.message);
-    res.status(500).send('Erro no servidor');
-  }
-});
 
 // Rota para familiares/amigos
 router.get('/contatos/familiar', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
-    console.log('Usuário autenticado (Familiar):', userId);
 
     const user = await User.findById(userId).populate('connections');
     if (!user) {
@@ -474,7 +513,6 @@ router.get('/contatos/familiar', authenticate, async (req, res) => {
 router.get('/contatos/cuidador', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
-    console.log('Usuário autenticado (Cuidador):', userId);
 
     const familiares = await User.find({
       userType: { $in: ['familiar/amigo'] },

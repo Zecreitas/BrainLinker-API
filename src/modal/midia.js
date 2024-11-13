@@ -26,7 +26,8 @@ const MidiaSchema = new mongoose.Schema({
   dataEnvio: {
     type: Date,
     default: Date.now
-  }
+  },
+  lida: { type: Boolean, default: false }
 });
 
 module.exports = mongoose.model('Midia', MidiaSchema);
