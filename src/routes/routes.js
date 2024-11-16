@@ -177,6 +177,23 @@ router.post('/conectar', authenticate, async (req, res) => {
   }
 });
 
+// Rota para obter informações de um usuário específico (incluindo conexões)
+router.get('/usuario/:userId', authenticate, async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const usuario = await User.findById(userId).populate('connections', 'email name');
+    if (!usuario) {
+      return res.status(404).json({ message: 'Usuário não encontrado' });
+    }
+    return res.json(usuario);
+  } catch (error) {
+    console.error('Erro ao buscar usuário:', error);
+    return res.status(500).json({ message: 'Erro no servidor' });
+  }
+});
+
+
 
 router.post('/upload-midia', authenticate, upload.single('file'), async (req, res) => {
 
@@ -238,7 +255,6 @@ router.get('/midias', authenticate, async (req, res) => {
     res.status(500).json({ message: 'Erro ao carregar as mídias' });
   }
 });
-
 
 // Rota para obter informações de um usuário
 router.get('/user/:id', authenticate, async (req, res) => {
@@ -351,25 +367,16 @@ router.get('/mensagens-naolidas/:connectionId?', authenticate, async (req, res) 
     const userId = req.user.id;
     const userType = req.user.userType;
 
-    console.log('=== Debugging Informações Iniciais ===');
-    console.log('User ID:', userId);
-    console.log('User Type:', userType);
-    console.log('Connection ID:', connectionId);
-
     let mensagensNaoLidas;
 
     if (userType === 'cuidador') {
-      console.log('Consultando mensagens para cuidador...');
       mensagensNaoLidas = await Message.find({
         destinatario: userId,
         lida: false,
       }).sort({ dataEnvio: 1 });
-
-      console.log('Mensagens não lidas (cuidador):', mensagensNaoLidas);
     }
 
     if (userType === 'familiar/amigo') {
-      console.log('Consultando mensagens para familiar/amigo...');
       if (!connectionId) {
         console.error('Connection ID não fornecido para familiar/amigo');
         return res.status(400).json({ message: 'Connection ID é necessário' });
@@ -382,12 +389,9 @@ router.get('/mensagens-naolidas/:connectionId?', authenticate, async (req, res) 
         ],
         lida: false,
       }).sort({ dataEnvio: 1 });
-
-      console.log('Mensagens não lidas (familiar/amigo):', mensagensNaoLidas);
     }
 
     if (!mensagensNaoLidas || mensagensNaoLidas.length === 0) {
-      console.log('Nenhuma mensagem não lida encontrada');
       return res.status(404).json({ message: 'Nenhuma mensagem não lida encontrada' });
     }
 
