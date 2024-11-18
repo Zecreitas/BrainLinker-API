@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const connectDB = async () => {
     try {
-        await mongoose.connect('mongodb://localhost:27017/brainlinker-api', {
+        await mongoose.connect('mongodb+srv://Guilherme:310506gui@brainlinker.dn1zf.mongodb.net/?retryWrites=true&w=majority&appName=BrainLinker', {
         });
         console.log('MongoDB foi conectado');
     } catch (err) {
